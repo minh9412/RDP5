@@ -29,35 +29,27 @@ jobs:
           # (Optional) Restart the Remote Desktop service to ensure changes take effect
           Restart-Service -Name TermService -Force
 
-      - name: Create RDP User with Secure but Simple Password
+      - name: Create RDP User with Secure Password
         run: |
-          # Generate password with required complexity but exclude problematic special characters
-          # Requirements: 8+ chars, uppercase, lowercase, number, and safe special chars
-          $upperChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-          $lowerChars = "abcdefghijklmnopqrstuvwxyz"
-          $numberChars = "0123456789"
-          # Exclude problematic chars like: " ' ` | < > & % \ / : ; 
-          $safeSpecialChars = "!@#$*+=?-_"
-          
-          # Build password with guaranteed complexity
-          $password = ""
-          $password += ($upperChars.ToCharArray() | Get-Random -Count 3) -join ""
-          $password += ($lowerChars.ToCharArray() | Get-Random -Count 3) -join ""
-          $password += ($numberChars.ToCharArray() | Get-Random -Count 2) -join ""
-          $password += ($safeSpecialChars.ToCharArray() | Get-Random -Count 2) -join ""
-          
-          # Shuffle the password characters
-          $passwordArray = $password.ToCharArray()
-          $shuffledPassword = ($passwordArray | Sort-Object { Get-Random }) -join ""
-          
-          $securePass = ConvertTo-SecureString $shuffledPassword -AsPlainText -Force
-          
-          # Create user
-          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires -PasswordNeverExpires
+          Add-Type -AssemblyName System.Security
+          $charSet = @{
+              Upper   = [char[]](65..90)      # A-Z
+              Lower   = [char[]](97..122)     # a-z
+              Number  = [char[]](48..57)      # 0-9
+              Special = @('.', ',', '@', '#', '*') # Simple safe special characters
+          }
+          $rawPassword = @()
+          $rawPassword += $charSet.Upper | Get-Random -Count 4
+          $rawPassword += $charSet.Lower | Get-Random -Count 4
+          $rawPassword += $charSet.Number | Get-Random -Count 4
+          $rawPassword += $charSet.Special | Get-Random -Count 4
+          $password = -join ($rawPassword | Sort-Object { Get-Random })
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
           
-          echo "RDP_CREDS=User: RDP | Password: $shuffledPassword" >> $env:GITHUB_ENV
+          echo "RDP_CREDS=User: RDP | Password: $password" >> $env:GITHUB_ENV
           
           if (-not (Get-LocalUser -Name "RDP")) {
               Write-Error "User creation failed"
@@ -105,7 +97,7 @@ jobs:
           }
           Write-Host "TCP connectivity successful!"
 
-      - name: Save RDP Info
+      - name: Maintain Connection
         run: |
           Write-Host "`n=== RDP ACCESS ==="
           Write-Host "Address: $env:TAILSCALE_IP"
@@ -113,27 +105,6 @@ jobs:
           Write-Host "Password: $(echo $env:RDP_CREDS)"
           Write-Host "==================`n"
           
-          # Create JSON entry for this server
-          $serverData = @{
-              "id" = (Get-Date).ToString("yyyyMMddHHmmss")
-              "ip" = $env:TAILSCALE_IP
-              "username" = "RDP"
-              "password" = $env:RDP_CREDS
-              "created" = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-          }
-          
-          # Save to file
-          $serverData | ConvertTo-Json | Out-File "server-info.json" -Encoding UTF8
-          Write-Host "Server info saved to server-info.json"
-
-      - name: Upload Server Info
-        uses: actions/upload-artifact@v3
-        with:
-          name: server-info-${{ github.run_id }}
-          path: server-info.json
-          
-      - name: Maintain Connection
-        run: |
           # Keep runner active indefinitely (or until manually cancelled)
           while ($true) {
               Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
